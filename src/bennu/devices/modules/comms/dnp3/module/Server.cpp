@@ -76,6 +76,8 @@ void Server::init(const std::string& endpoint, const std::uint16_t& address)
     //   1) Initialize db
     //   2) Initialize dnp3 binary/analog data; kv.first = XML config register address,
     //      so this supports noncontiguous addresses
+    //   3) Control points are registered as output status (groups 10/40) so a
+    //      master can read them back when verifying a select/operate
     opendnp3::DatabaseConfig db = opendnp3::DatabaseConfig();
 
     for (const auto& kv : mBinaryPoints)
@@ -88,12 +90,27 @@ void Server::init(const std::string& endpoint, const std::uint16_t& address)
         db.analog_input[kv.first] = {};
     }
 
+    for (const auto& kv : mBinaryOutputPoints)
+    {
+        db.binary_output_status[kv.first] = {};
+    }
+
+    for (const auto& kv : mAnalogOutputPoints)
+    {
+        db.analog_output_status[kv.first] = {};
+    }
+
     opendnp3::OutstationStackConfig config(db);
 
     // Log data size
     std::ostringstream log_stream;
     log_stream << "Binary Size is " << config.database.binary_input.size() << " and ";
     log_stream << "Analog Size is " << config.database.analog_input.size() << ".";
+    logEvent("dnp3 server init", "info", log_stream.str());
+    std::cout << log_stream.str() << std::endl;
+    log_stream.str("");
+    log_stream << "Binary Output Size is " << config.database.binary_output_status.size() << " and ";
+    log_stream << "Analog Output Size is " << config.database.analog_output_status.size() << ".";
     logEvent("dnp3 server init", "info", log_stream.str());
     std::cout << log_stream.str() << std::endl;
     fflush(stdout);
@@ -160,6 +177,29 @@ void Server::update()
                 mOutstation->Apply(builder.Build());
             }
         }
+        // Refresh output status (groups 10/40) so a master reading back a
+        // control point sees the current commanded value.
+        for (const auto& kv : mBinaryOutputPoints)
+        {
+            const std::string tag = kv.second.tag;
+            if (mDataManager->hasTag(tag))
+            {
+                opendnp3::UpdateBuilder builder;
+                builder.Update(opendnp3::BinaryOutputStatus(mDataManager->getDataByTag<bool>(tag)), kv.first);
+                mOutstation->Apply(builder.Build());
+            }
+        }
+        for (const auto& kv : mAnalogOutputPoints)
+        {
+            const std::string tag = kv.second.tag;
+            if (mDataManager->hasTag(tag))
+            {
+                opendnp3::UpdateBuilder builder;
+                builder.Update(opendnp3::AnalogOutputStatus(mDataManager->getDataByTag<double>(tag),
+                                                            opendnp3::Flags(0x01)), kv.first);
+                mOutstation->Apply(builder.Build());
+            }
+        }
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 }
@@ -180,6 +220,21 @@ void Server::configurePoints(opendnp3::DatabaseConfig& config)
         config.analog_input[kv.first].evariation = kv.second.evariation;
         config.analog_input[kv.first].clazz = kv.second.clazz;
         config.analog_input[kv.first].deadband = kv.second.deadband;
+    }
+
+    for (const auto& kv : mBinaryOutputPoints)
+    {
+        config.binary_output_status[kv.first].svariation = kv.second.svariation;
+        config.binary_output_status[kv.first].evariation = kv.second.evariation;
+        config.binary_output_status[kv.first].clazz = kv.second.clazz;
+    }
+
+    for (const auto& kv : mAnalogOutputPoints)
+    {
+        config.analog_output_status[kv.first].svariation = kv.second.svariation;
+        config.analog_output_status[kv.first].evariation = kv.second.evariation;
+        config.analog_output_status[kv.first].clazz = kv.second.clazz;
+        config.analog_output_status[kv.first].deadband = kv.second.deadband;
     }
 }
 
@@ -245,7 +300,7 @@ bool Server::addBinaryInput
             }
         }
 
-        Point<opendnp3::StaticBinaryVariation, opendnp3::EventBinaryVariation> point;
+        BinaryInputPoint point;
 
         point.address = address;
         point.tag = tag;
@@ -264,12 +319,12 @@ bool Server::addBinaryOutput(const std::uint16_t address, const std::string& tag
 {
     if (mDataManager->hasTag(tag))
     {
-        Point<opendnp3::StaticBinaryVariation, opendnp3::EventBinaryVariation> point;
+        BinaryOutputPoint point;
         point.address = address;
         point.tag = tag;
         point.sbo = sbo;
 
-        mBinaryPoints[address] = point;
+        mBinaryOutputPoints[address] = point;
 
         return true;
     }
@@ -339,7 +394,7 @@ bool Server::addAnalogInput
             }
         }
 
-        Point<opendnp3::StaticAnalogVariation, opendnp3::EventAnalogVariation> point;
+        AnalogInputPoint point;
 
         point.address = address;
         point.tag = tag;
@@ -360,12 +415,12 @@ bool Server::addAnalogOutput(const std::uint16_t address, const std::string& tag
 {
     if (mDataManager->hasTag(tag))
     {
-        Point<opendnp3::StaticAnalogVariation, opendnp3::EventAnalogVariation> point;
+        AnalogOutputPoint point;
         point.address = address;
         point.tag = tag;
         point.sbo = sbo;
 
-        mAnalogPoints[address] = point;
+        mAnalogOutputPoints[address] = point;
 
         return true;
     }
@@ -384,8 +439,8 @@ void Server::writeBinary(std::uint16_t address, bool value)
         logEvent("write binary", "error", log_stream.str());
         return;
     }
-    auto iter = mBinaryPoints.find(address);
-    if (iter == mBinaryPoints.end())
+    auto iter = mBinaryOutputPoints.find(address);
+    if (iter == mBinaryOutputPoints.end())
     {
         log_stream.str("");
         log_stream << "Invalid binary point command request address: " << address;
@@ -393,6 +448,14 @@ void Server::writeBinary(std::uint16_t address, bool value)
         return;
     }
     mDataManager->addUpdatedBinaryTag(iter->second.tag, value);
+    // Reflect the commanded value in the output status (group 10) immediately so
+    // a master reading back right after the operate sees the new state.
+    if (mOutstation)
+    {
+        opendnp3::UpdateBuilder builder;
+        builder.Update(opendnp3::BinaryOutputStatus(value), address);
+        mOutstation->Apply(builder.Build());
+    }
     log_stream.str("");
     log_stream << "Data successfully written.";
     logEvent("write binary", "info", log_stream.str());
@@ -410,8 +473,8 @@ void Server::writeAnalog(std::uint16_t address, float value)
         logEvent("write binary", "error", log_stream.str());
         return;
     }
-    auto iter = mAnalogPoints.find(address);
-    if (iter == mAnalogPoints.end())
+    auto iter = mAnalogOutputPoints.find(address);
+    if (iter == mAnalogOutputPoints.end())
     {
         log_stream.str("");
         log_stream << "Invalid analog point command request address: " << address;
@@ -419,16 +482,23 @@ void Server::writeAnalog(std::uint16_t address, float value)
         return;
     }
     mDataManager->addUpdatedAnalogTag(iter->second.tag, value);
+    // Reflect the commanded value in the output status (group 40) immediately so
+    // a master reading back right after the operate sees the new state.
+    if (mOutstation)
+    {
+        opendnp3::UpdateBuilder builder;
+        builder.Update(opendnp3::AnalogOutputStatus(value, opendnp3::Flags(0x01)), address);
+        mOutstation->Apply(builder.Build());
+    }
     log_stream.str("");
     log_stream << "Data successfully written.";
     logEvent("write analog", "info", log_stream.str());
 }
 
-const Point<opendnp3::StaticBinaryVariation, opendnp3::EventBinaryVariation>*
-Server::getBinaryPoint(const uint16_t address)
+const BinaryOutputPoint* Server::getBinaryPoint(const uint16_t address)
 {
-    auto iter = mBinaryPoints.find(address);
-    if (iter == mBinaryPoints.end())
+    auto iter = mBinaryOutputPoints.find(address);
+    if (iter == mBinaryOutputPoints.end())
     {
         return NULL;
     }
@@ -436,11 +506,10 @@ Server::getBinaryPoint(const uint16_t address)
     return &iter->second;
 }
 
-const Point<opendnp3::StaticAnalogVariation, opendnp3::EventAnalogVariation>*
-Server::getAnalogPoint(const uint16_t address)
+const AnalogOutputPoint* Server::getAnalogPoint(const uint16_t address)
 {
-    auto iter = mAnalogPoints.find(address);
-    if (iter == mAnalogPoints.end())
+    auto iter = mAnalogOutputPoints.find(address);
+    if (iter == mAnalogOutputPoints.end())
     {
         return NULL;
     }
