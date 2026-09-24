@@ -461,7 +461,7 @@ void Server::writeBinary(std::uint16_t address, bool value)
     logEvent("write binary", "info", log_stream.str());
 }
 
-void Server::writeAnalog(std::uint16_t address, float value)
+void Server::writeAnalog(std::uint16_t address, double value)
 {
     std::ostringstream log_stream;
     log_stream << "Analog point command at address " << address << " with value " << value << ".";
@@ -470,7 +470,7 @@ void Server::writeAnalog(std::uint16_t address, float value)
     {
         log_stream.str("");
         log_stream << "There was an error with the data module";
-        logEvent("write binary", "error", log_stream.str());
+        logEvent("write analog", "error", log_stream.str());
         return;
     }
     auto iter = mAnalogOutputPoints.find(address);

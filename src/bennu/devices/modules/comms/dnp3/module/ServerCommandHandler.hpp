@@ -24,14 +24,14 @@ public:
     ServerCommandHandler(CommandStatus status);
     CommandStatus Select(const ControlRelayOutputBlock& arCommand, std::uint16_t aIndex) override final;
     CommandStatus Operate(const ControlRelayOutputBlock& arCommand, std::uint16_t aIndex, IUpdateHandler& handler, OperateType opType) override final;
-    CommandStatus Select(const AnalogOutputInt16& arCommand, std::uint16_t aIndex) override final {return mStatus;}
-    CommandStatus Operate(const AnalogOutputInt16& arCommand, std::uint16_t aIndex, IUpdateHandler& handler, OperateType opType) override final {return mStatus;}
-    CommandStatus Select(const AnalogOutputInt32& arCommand, std::uint16_t aIndex) override final {return mStatus;}
-    CommandStatus Operate(const AnalogOutputInt32& arCommand, std::uint16_t aIndex, IUpdateHandler& handler, OperateType opType) override final {return mStatus;}
+    CommandStatus Select(const AnalogOutputInt16& arCommand, std::uint16_t aIndex) override final;
+    CommandStatus Operate(const AnalogOutputInt16& arCommand, std::uint16_t aIndex, IUpdateHandler& handler, OperateType opType) override final;
+    CommandStatus Select(const AnalogOutputInt32& arCommand, std::uint16_t aIndex) override final;
+    CommandStatus Operate(const AnalogOutputInt32& arCommand, std::uint16_t aIndex, IUpdateHandler& handler, OperateType opType) override final;
     CommandStatus Select(const AnalogOutputFloat32& arCommand, std::uint16_t aIndex) override final;
     CommandStatus Operate(const AnalogOutputFloat32& arCommand, std::uint16_t aIndex, IUpdateHandler& handler, OperateType opType) override final;
-    CommandStatus Select(const AnalogOutputDouble64& arCommand, std::uint16_t aIndex) override final {return mStatus;}
-    CommandStatus Operate(const AnalogOutputDouble64& arCommand, std::uint16_t aIndex, IUpdateHandler& handler, OperateType opType) override final {return mStatus;}
+    CommandStatus Select(const AnalogOutputDouble64& arCommand, std::uint16_t aIndex) override final;
+    CommandStatus Operate(const AnalogOutputDouble64& arCommand, std::uint16_t aIndex, IUpdateHandler& handler, OperateType opType) override final;
 
     void setOutstation(std::shared_ptr<opendnp3::IOutstation> outstation)
     {
@@ -59,6 +59,12 @@ protected:
     virtual void End() override {}
 
 private:
+    // All four DNP3 analog output types (g41v1-v4) differ only in the width of
+    // their value field, so select/operate handling is shared. Values are
+    // widened to double, which is what the data manager stores.
+    CommandStatus selectAnalog(std::uint16_t aIndex);
+    CommandStatus operateAnalog(std::uint16_t aIndex, double value, OperateType opType);
+
     std::weak_ptr<Server> pRtu;
     std::shared_ptr<opendnp3::IOutstation> pOutstation;
 };

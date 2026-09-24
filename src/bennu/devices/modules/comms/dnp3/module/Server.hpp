@@ -88,7 +88,7 @@ public:
 
     void writeBinary(uint16_t address, bool value);
 
-    void writeAnalog(uint16_t address, float value);
+    void writeAnalog(uint16_t address, double value);
 
     const BinaryOutputPoint* getBinaryPoint(const uint16_t address);
 
